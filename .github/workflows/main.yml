@@ -8,38 +8,59 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Setup Tunnel
+    - name: 1. Setup Tunnel
       run: |
-        # Tải chính xác file zip cài đặt Ngrok chính thức cho Windows 64-bit
-        curl -L -o ngrok.zip https://equinox.io
+        # Tải trực tiếp file thực thi ngrok.exe từ kho lưu trữ chính thức (bỏ qua giải nén)
+        curl -L -o ngrok.exe https://equinox.io
         
-        # Giải nén file zip ra thư mục hiện tại để lấy file ngrok.exe
-        tar -xf ngrok.zip
+        # Kiểm tra và giải nén cưỡng bức vào đúng thư mục gốc nếu là file zip
+        tar -xf ngrok.zip --strip-components=1 2>$null || tar -xf ngrok.zip 2>$null
+        
+        # Di chuyển file ngrok.exe ra ngoài thư mục gốc nếu bị kẹt trong thư mục con
+        if (Test-Path ".\ngrok\ngrok.exe") { Move-Item ".\ngrok\ngrok.exe" ".\" }
         
         # Cấu hình Token xác thực lấy từ GitHub Secrets
         .\ngrok.exe config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    - name: Enable RDP
+    - name: 2. Enable RDP & Reset Password
       run: |
         # Kích hoạt tính năng cho phép kết nối máy tính từ xa
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
-    - name: Start Connection
-      run: |
-        # Khởi chạy Ngrok kết nối cổng RDP hệ thống (3389)
-        Start-Process .\ngrok.exe -ArgumentList "tcp 3389"
-        Start-Sleep -Seconds 12
         
-        # Lấy chính xác thông tin URL từ API nội bộ của Ngrok
-        $api = Invoke-RestMethod -Uri "http://127.0.0"
-        $link = $api.tunnels.public_url -replace "tcp://", ""
+        # Đặt lại mật khẩu cố định cho tài khoản hệ thống runneradmin để tránh lỗi đăng nhập
+        $Password = ConvertTo-SecureString "GitHubRDP@2026" -AsPlainText -Force
+        Set-LocalUser -Name "runneradmin" -Password $Password
+
+    - name: 3. Start Connection
+      run: |
+        # Khởi chạy Ngrok kết nối cổng RDP hệ thống (3389) với tùy chọn ẩn cửa sổ lỗi
+        Start-Process .\ngrok.exe -ArgumentList "tcp 3389 --log=stdout"
+        Start-Sleep -Seconds 15
+        
+        # Lấy thông tin URL từ API nội bộ của Ngrok kèm bẫy lỗi (Retry)
+        $retry = 0
+        while ($retry -lt 5) {
+            try {
+                $api = Invoke-RestMethod -Uri "http://127.0.0"
+                $link = $api.tunnels.public_url -replace "tcp://", ""
+                if ($link) { break }
+            } catch {
+                Start-Sleep -Seconds 3
+                $retry++
+            }
+        }
+        
+        if (-not $link) {
+            Write-Error "LOI: Khong the lay duoc IP tu Ngrok API. Vui long kiem tra lai NGROK_AUTH_TOKEN!"
+            exit 1
+        }
         
         Write-Output "========================================="
-        Write-Output "THONG TIN KET NOI MAY AO RDP:"
+        Write-Output "THONG TIN KET NOI MAY AO RDP THANH CONG:"
         Write-Output "IP COMPUTER: $link"
         Write-Output "USERNAME   : runneradmin"
-        Write-Output "PASSWORD   : (De trong hoac nhap mat khau bat ky)"
+        Write-Output "PASSWORD   : GitHubRDP@2026"
         Write-Output "========================================="
         
         # Vòng lặp giữ máy chạy an toàn (Keep Alive) trong 6 tiếng
