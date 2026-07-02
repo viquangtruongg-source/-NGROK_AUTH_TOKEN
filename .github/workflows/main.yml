@@ -1,0 +1,58 @@
+name: VPSWindowsServer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: 1. Tai va Cau hinh Ngrok
+      run: |
+        curl -L -o ngrok.zip https://equinox.io
+        tar -xf ngrok.zip
+        .\ngrok.exe config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+    - name: 2. Kich hoat Remote Desktop (RDP)
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    - name: 3. Tao Tai khoan Administrator
+      run: |
+        $Password = ConvertTo-SecureString "GitHubRDP@2026" -AsPlainText -Force
+        New-LocalUser "RDPUser" -Password $Password -Description "GitHub Premium RDP"
+        Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
+
+    - name: 4. Bat dau Mo Cong Tunnel
+      run: |
+        Start-Process .\ngrok.exe -ArgumentList "tcp 3389"
+        Start-Sleep -Seconds 12
+
+    - name: 5. Xuat Thong tin va Chay Vong lap Duy tri RDP
+      run: |
+        $ngrok_api = Invoke-RestMethod -Uri "http://127.0.0"
+        $public_url = $ngrok_api.tunnels.public_url
+        $clean_url = $public_url -replace "tcp://", ""
+        
+        Write-Output "========================================="
+        Write-Output "THONG TIN KET NOI MAY AO RDP CUA BAN:"
+        Write-Output "IP COMPUTER: $clean_url"
+        Write-Output "USERNAME   : RDPUser"
+        Write-Output "PASSWORD   : GitHubRDP@2026"
+        Write-Output "========================================="
+        
+        $total_minutes = 360
+        $current_minute = 0
+        
+        Write-Output "Bat dau kich hoat vong lap duy tri RDP..."
+        
+        do {
+            Start-Sleep -Seconds 60
+            $current_minute++
+            $remaining = $total_minutes - $current_minute
+            Write-Output "[$current_minute/$total_minutes] May ao hoat dong tot. Con lai: $remaining phut."
+            [Console]::Out.Flush()
+        } while ($current_minute -lt $total_minutes)
